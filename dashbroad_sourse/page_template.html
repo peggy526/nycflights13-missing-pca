@@ -1,0 +1,492 @@
+<title>航班缺失 PCA 探索</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a working bench — question rail on top, controls strip, then loadings | scores, then the read-outs that follow the brush. */
+:root{
+  --bg:#f3f5f7; --surface:#ffffff; --surface2:#eef1f4; --ink:#15191e; --ink2:#47505a; --muted:#7a838d; --line:#dde2e7;
+  --grid:#e7eaee; --axis:#b9c0c7;
+  --sA:#eb6834; --sB:#1baf7a; --sC:#eda100; --sD:#2a78d6;
+  --obs:#2a78d6; --mis:#eb6834; --o0:#2a78d6; --o1:#eb6834; --o2:#1baf7a;
+  --brush:#15191e; --barAll:#b9c0c7; --barSel:#2a78d6; --focus:#2a78d6;
+  --ff:"Noto Sans TC","Noto Sans CJK TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --mono:"IBM Plex Mono","Noto Sans Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#111417; --surface:#1a1e22; --surface2:#22272c; --ink:#eceff2; --ink2:#b7bfc7; --muted:#88919a; --line:#2d3339;
+  --grid:#262b31; --axis:#4a525a; --sA:#d95926; --sB:#199e70; --sC:#c98500; --sD:#3987e5;
+  --obs:#3987e5; --mis:#d95926; --o0:#3987e5; --o1:#d95926; --o2:#199e70; --brush:#eceff2; --barAll:#4a525a; --barSel:#3987e5; --focus:#3987e5; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111417; --surface:#1a1e22; --surface2:#22272c; --ink:#eceff2; --ink2:#b7bfc7; --muted:#88919a; --line:#2d3339;
+  --grid:#262b31; --axis:#4a525a; --sA:#d95926; --sB:#199e70; --sC:#c98500; --sD:#3987e5;
+  --obs:#3987e5; --mis:#d95926; --o0:#3987e5; --o1:#d95926; --o2:#199e70; --brush:#eceff2; --barAll:#4a525a; --barSel:#3987e5; --focus:#3987e5; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--ff);font-size:14px;line-height:1.5}
+.wrap{max-width:1440px;margin:0 auto;padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:14px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px}
+h1{font-size:22px;font-weight:700;margin:0;letter-spacing:.01em;text-wrap:balance}
+.sub{color:var(--ink2);font-size:13px;margin:0}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
+.card h2{font-size:13px;font-weight:700;margin:0 0 8px;color:var(--ink);letter-spacing:.02em}
+.card .hint{color:var(--muted);font-size:12px;margin:0}
+/* question rail */
+.qrail{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}
+.q{flex:0 0 auto;border:1px solid var(--line);background:var(--surface);color:var(--ink2);border-radius:999px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
+.q b{font-family:var(--mono);color:var(--muted);margin-right:6px;font-weight:500}
+.q[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.q[aria-pressed="true"] b{color:var(--surface)}
+.finding{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;align-items:start;background:var(--surface2);border-radius:10px;padding:12px 16px}
+.finding .lab{font-size:12px;color:var(--muted);letter-spacing:.06em;padding-top:2px}
+.finding .qq{font-weight:700;font-size:15px}
+.finding .ans{grid-column:2;color:var(--ink2);max-width:110ch}
+/* controls */
+.controls{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+.ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ctl > span{font-size:12px;color:var(--muted);letter-spacing:.04em}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{font:inherit;font-size:13px;border:0;background:var(--surface);color:var(--ink2);padding:5px 10px;cursor:pointer;border-left:1px solid var(--line)}
+.seg button:first-child{border-left:0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--surface)}
+.chip{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:6px;padding:3px 8px;cursor:pointer;font-family:var(--mono)}
+.chip[aria-pressed="true"]{color:var(--ink);border-color:var(--ink2);background:var(--surface2)}
+select{font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:4px 6px}
+button:focus-visible,select:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+/* main grid */
+.main{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:14px}
+.reads{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr) minmax(0,1.05fr);gap:14px}
+@media (max-width:1100px){.main{grid-template-columns:minmax(0,1fr)}.reads{grid-template-columns:minmax(0,1fr)}}
+#loadSvg{width:100%;height:auto;display:block}
+#loadSvg text{font-family:var(--ff);font-size:12px;fill:var(--ink2)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ink2);margin-top:6px}
+.kv{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--ink2);margin-top:6px}
+.scoreHead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:6px}
+#plotBox{position:relative;margin-top:6px;touch-action:none}
+#plot{display:block;width:100%;cursor:crosshair}
+.tip{position:absolute;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.45;box-shadow:0 4px 18px rgba(0,0,0,.12);max-width:260px;z-index:5}
+.tip .t{font-weight:700;margin-bottom:2px}
+.tip .r{display:flex;justify-content:space-between;gap:14px}
+.tip .r span:last-child{font-family:var(--mono);font-variant-numeric:tabular-nums}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:5px 6px;text-align:right;border-bottom:1px solid var(--grid);font-variant-numeric:tabular-nums}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500;font-size:12px}
+td.num{font-family:var(--mono)}
+.tblwrap{overflow-x:auto}
+#monthSvg{width:100%;height:auto;display:block}
+#monthSvg text{font-family:var(--ff);font-size:11px;fill:var(--muted)}
+.btnlink{font:inherit;font-size:12px;background:none;border:1px solid var(--line);color:var(--ink2);border-radius:6px;padding:3px 8px;cursor:pointer}
+footer{color:var(--muted);font-size:12px;max-width:120ch}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>航班缺失 × PCA 互動探索</h1>
+    <p class="sub">nycflights13 · 2013 年紐約三機場正常抵達航班 327,346 班 · 11 個標準化變數 · 四種缺失處理策略</p>
+  </header>
+
+  <nav class="qrail" id="qrail" aria-label="問題導覽"></nav>
+  <section class="finding" aria-live="polite">
+    <span class="lab">問題</span><div class="qq" id="qText">選一個問題，或直接操作下方圖表</div>
+    <div class="ans" id="aText">圖表都可以 hover 看細節、在分數圖上拖曳框選、用下方條件篩選，或依子群體切成多個小圖。</div>
+  </section>
+
+  <section class="card controls" aria-label="控制">
+    <div class="ctl"><span>主策略</span><div class="seg" id="segStrat"></div></div>
+    <div class="ctl"><span>對照策略</span><select id="selCmp"></select></div>
+    <div class="ctl"><span>軸</span><select id="selX"></select><span>×</span><select id="selY"></select></div>
+    <div class="ctl"><span>著色</span><div class="seg" id="segColor"></div></div>
+    <div class="ctl"><span>切分</span><div class="seg" id="segFacet"></div></div>
+    <div class="ctl"><span>機場</span><div id="chipsO" style="display:flex;gap:4px"></div></div>
+    <div class="ctl"><span>月份</span><div id="chipsM" style="display:flex;gap:3px;flex-wrap:wrap"></div><button class="btnlink" id="mAll">全選</button></div>
+    <div class="ctl"><span>氣壓</span><div class="seg" id="segP"></div></div>
+  </section>
+
+  <div class="main">
+    <section class="card" aria-labelledby="hLoad">
+      <h2 id="hLoad">負荷量圖（變數與主成分的相關）</h2>
+      <p class="hint">滑到箭頭端點看數值；點變數群組可篩選顯示。實線＝主策略，虛線＝對照策略。</p>
+      <div class="legend" id="varGroups"></div>
+      <svg id="loadSvg" viewBox="-1.3 -1.3 2.6 2.6" role="img" aria-label="負荷量圖"></svg>
+      <div class="kv" id="loadStats"></div>
+    </section>
+    <section class="card" aria-labelledby="hScore">
+      <div class="scoreHead">
+        <h2 id="hScore">分數圖（每點一班航班）</h2>
+        <div style="display:flex;gap:8px;align-items:center"><span class="hint" id="nShown"></span><button class="btnlink" id="clearBrush">清除框選</button></div>
+      </div>
+      <p class="hint">拖曳框選一塊區域，下方三張表會只算框內航班；點一下空白處清除。</p>
+      <div class="legend" id="colorLegend"></div>
+      <div id="plotBox"><canvas id="plot"></canvas><div class="tip" id="tip" hidden></div></div>
+    </section>
+  </div>
+
+  <div class="reads">
+    <section class="card" aria-labelledby="hSum">
+      <h2 id="hSum">框選摘要（樣本）</h2>
+      <div class="tblwrap"><table id="sumTbl"></table></div>
+    </section>
+    <section class="card" aria-labelledby="hMon">
+      <h2 id="hMon">月份分佈：篩選全體 vs 框選</h2>
+      <svg id="monthSvg" viewBox="0 0 420 210" role="img" aria-label="月份分佈"></svg>
+      <div class="legend"><span><span class="sw" style="background:var(--barAll)"></span>目前篩選</span><span><span class="sw" style="background:var(--barSel)"></span>框選範圍</span></div>
+    </section>
+    <section class="card" aria-labelledby="hGrp">
+      <h2 id="hGrp">依氣壓原始狀態分組（全資料）</h2>
+      <p class="hint" id="grpHint"></p>
+      <div class="tblwrap"><table id="grpTbl"></table></div>
+    </section>
+  </div>
+
+  <footer>分數圖、框選摘要與月份分佈使用隨機抽樣的 20,000 班（seed 2013）；分組表使用全部 327,346 班。各策略皆以 prcomp(scale.=TRUE) 計算，主成分正負號對齊策略 D 的 R 輸出。A＝完整案例、B＝整體中位數補值、C＝機場×月份中位數補值、D＝同機場前後小時內插。</footer>
+</div>
+
+<script id="d" type="application/json">__DATA__</script>
+<script>
+(function(){
+const DATA = JSON.parse(document.getElementById('d').textContent);
+const V = DATA.vars, N = DATA.N, P = DATA.pts;
+const VL = {dep_delay:'起飛延誤',arr_delay:'抵達延誤',air_time:'飛行時間',distance:'航程距離',temp:'氣溫',dewp:'露點',humid:'濕度',wind_speed:'風速',precip:'降水',visib:'能見度',pressure:'氣壓'};
+const FLIGHT = new Set(['dep_delay','arr_delay','air_time','distance']);
+const SN = {A:'A 完整案例',B:'B 整體中位數',C:'C 機場×月份',D:'D 時間內插'};
+const ORIG = ['EWR','JFK','LGA'];
+const SC = {};
+for (const s of 'ABCD'){ SC[s] = DATA.sc[s].map(col => Float32Array.from(col, v => v===null ? NaN : v/100)); }
+const st = {strat:'D', cmp:'none', x:0, y:1, color:'pm', facet:'none', O:new Set([0,1,2]), M:new Set([1,2,3,4,5,6,7,8,9,10,11,12]), p:'all', brush:null, groups:new Set(['flight','weather']), hoverVar:null, q:null};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const $ = id => document.getElementById(id);
+const fmt = (v,d=1) => (v===null||!isFinite(v)) ? '—' : v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtS = (v,d=2) => (v>=0?'+':'−')+Math.abs(v).toFixed(d);
+
+/* ---------- controls ---------- */
+function seg(el, items, key, onSet){
+  el.innerHTML = '';
+  for (const [val,label] of items){
+    const b = document.createElement('button'); b.type='button'; b.textContent = label; b.dataset.v = val;
+    b.addEventListener('click', () => { onSet(val); st.q=null; sync(); });
+    el.appendChild(b);
+  }
+}
+seg($('segStrat'), [['A','A 刪除'],['B','B 中位數'],['C','C 機場×月'],['D','D 內插']], 'strat', v => { st.strat=v; if (st.cmp===v) st.cmp='none'; st.brush=null; });
+seg($('segColor'), [['pm','氣壓缺失狀態'],['o','機場'],['arr','抵達延誤']], 'color', v => st.color=v);
+seg($('segFacet'), [['none','不切分'],['o','機場'],['season','季節'],['pm','氣壓狀態']], 'facet', v => st.facet=v);
+seg($('segP'), [['all','全部'],['obs','原本有值'],['mis','原本缺失']], 'p', v => st.p=v);
+for (const sel of [$('selX'),$('selY')]) for (let j=0;j<5;j++){ const o=document.createElement('option'); o.value=j; o.textContent='PC'+(j+1); sel.appendChild(o); }
+$('selX').addEventListener('change', e => { st.x=+e.target.value; st.brush=null; st.q=null; sync(); });
+$('selY').addEventListener('change', e => { st.y=+e.target.value; st.brush=null; st.q=null; sync(); });
+$('selCmp').addEventListener('change', e => { st.cmp=e.target.value; st.q=null; sync(); });
+ORIG.forEach((o,i) => { const b=document.createElement('button'); b.className='chip'; b.type='button'; b.textContent=o; b.addEventListener('click',()=>{ st.O.has(i)?st.O.delete(i):st.O.add(i); if(!st.O.size) st.O.add(i); st.q=null; sync(); }); $('chipsO').appendChild(b); });
+for (let m=1;m<=12;m++){ const b=document.createElement('button'); b.className='chip'; b.type='button'; b.textContent=m; b.title=m+' 月'; b.addEventListener('click',()=>{ st.M.has(m)?st.M.delete(m):st.M.add(m); if(!st.M.size) st.M.add(m); st.q=null; sync(); }); $('chipsM').appendChild(b); }
+$('mAll').addEventListener('click',()=>{ st.M=new Set([1,2,3,4,5,6,7,8,9,10,11,12]); st.q=null; sync(); });
+$('clearBrush').addEventListener('click',()=>{ st.brush=null; sync(); });
+const groupsEl = $('varGroups');
+[['flight','飛行指標'],['weather','天氣指標']].forEach(([g,l]) => { const b=document.createElement('button'); b.className='chip'; b.type='button'; b.dataset.g=g; b.textContent=l; b.style.fontFamily='var(--ff)'; b.addEventListener('click',()=>{ st.groups.has(g)?st.groups.delete(g):st.groups.add(g); if(!st.groups.size) st.groups.add(g); drawLoad(); syncPressed(); }); groupsEl.appendChild(b); });
+
+/* ---------- guided questions (findings verified on the full data) ---------- */
+const ALLM = [1,2,3,4,5,6,7,8,9,10,11,12];
+const QS = [
+ {t:'哪些變數決定 PC1、PC2？', set:{strat:'D',cmp:'none',x:0,y:1,color:'pm',facet:'none',O:[0,1,2],M:ALLM,p:'all',brush:null,hoverVar:'dewp'},
+  a:'PC1 由露點（0.78）、濕度（0.67）、氣溫（0.56）與兩個延誤（0.53–0.54）同向撐起，能見度（−0.47）與氣壓（−0.45）反向：PC1 高分＝悶熱潮濕、低能見度、低氣壓、延誤多。PC2 幾乎只有航程距離與飛行時間（0.96）。起飛與抵達延誤的箭頭重疊，代表兩者在 PCA 裡是同一個訊號。'},
+ {t:'改成直接刪除（A），結構會變嗎？', set:{strat:'D',cmp:'A',x:0,y:1,color:'pm',facet:'none',O:[0,1,2],M:ALLM,p:'all',brush:null,hoverVar:'arr_delay'},
+  a:'兩組箭頭幾乎重合：PC1 相似度 0.991、PC2 0.999，主結構沒變。差在細節：A 的延誤箭頭變短（抵達延誤在 PC1 的負荷量 0.45，D 為 0.54），氣溫箭頭變長（0.66 vs 0.56）。被 A 刪掉的正是壞天氣、高延誤的航班，延誤和天氣軸的連結因此變弱。'},
+ {t:'氣壓原本缺失的航班落在哪裡？', set:{strat:'D',cmp:'none',x:0,y:1,color:'pm',facet:'pm',O:[0,1,2],M:ALLM,p:'all',brush:null,hoverVar:null},
+  a:'切成兩組後很清楚：原本缺失的航班集中在 PC1 右側（全資料平均 +1.61，有值組 −0.20；62.5% 落在 PC1 > 1，有值組只有 18.8%）。PC1 右側是悶熱潮濕、低能見度、延誤多的時段，所以直接刪除等於切掉 PC1 的這一端。'},
+ {t:'是某個機場造成的嗎？', set:{strat:'D',cmp:'none',x:0,y:1,color:'pm',facet:'o',O:[0,1,2],M:ALLM,p:'all',brush:null,hoverVar:null},
+  a:'三個機場的圖樣一致，缺失組都偏向 PC1 右側（平均 EWR +1.71、JFK +1.60、LGA +1.50）。機場之間的差別在上下：JFK 偏上（PC2 +0.42，平均航程 1,275 英里）、LGA 偏下（−0.48，785 英里）。這是航線長短的差異，不是缺失造成的。'},
+ {t:'固定 LGA、5 月，差異還在嗎？', set:{strat:'D',cmp:'none',x:0,y:1,color:'pm',facet:'none',O:[2],M:[5],p:'all',brush:null,hoverVar:null},
+  a:'控制機場與月份後兩群仍分開。全資料：缺失 1,459 班、有值 7,096 班，平均抵達延誤 10.8 vs 1.2 分，PC1 +1.80 vs +0.02，濕度 83% vs 53%。缺失跟著當下天氣走，不是機場或月份，所以依「機場×月份」補值（策略 C）的假設不成立，改用時間內插（策略 D）。'},
+ {t:'框選 PC1 高分區：這些航班有什麼共同點？', set:{strat:'D',cmp:'none',x:0,y:1,color:'arr',facet:'none',O:[0,1,2],M:ALLM,p:'all',brush:{x0:2,x1:99,y0:-99,y1:99},hoverVar:null},
+  a:'PC1 > 2 的航班（全資料 30,795 班）有 40.6% 原本缺氣壓（整體 11.0%），平均抵達延誤 80 分（整體 6.9 分），濕度 83%、能見度 6.3 英里，月份集中在 5–8 月。缺氣壓、壞天氣、嚴重延誤是同一群航班。'},
+ {t:'PC3 低分是冬天的延誤嗎？', set:{strat:'D',cmp:'none',x:0,y:2,color:'arr',facet:'none',O:[0,1,2],M:ALLM,p:'all',brush:{x0:-99,x1:99,y0:-99,y1:-2},hoverVar:null},
+  a:'PC3 < −2 的航班（全資料 20,842 班）平均抵達延誤 114 分、氣溫 46°F，月份集中在 1、3、12、2 月。延誤因此至少有兩種天氣型態：PC1 的悶熱潮濕（5–8 月）與 PC3 的寒冷天氣（冬春）。'}
+];
+QS.forEach((q,i) => { const b=document.createElement('button'); b.className='q'; b.type='button'; b.innerHTML='<b>Q'+(i+1)+'</b>'+q.t; b.addEventListener('click',()=>applyQ(i)); $('qrail').appendChild(b); });
+function applyQ(i){
+  const s = QS[i].set; st.q=i;
+  Object.assign(st, {strat:s.strat,cmp:s.cmp,x:s.x,y:s.y,color:s.color,facet:s.facet,p:s.p,brush:s.brush?{...s.brush}:null,hoverVar:s.hoverVar});
+  st.O=new Set(s.O); st.M=new Set(s.M); st.groups=new Set(['flight','weather']);
+  sync();
+}
+
+/* ---------- data helpers ---------- */
+const season = m => (m===12||m<=2)?0:(m<=5?1:(m<=8?2:3));
+const SEASONS = ['冬（12–2 月）','春（3–5 月）','夏（6–8 月）','秋（9–11 月）'];
+function passes(i){
+  if (!st.O.has(P.o[i]) || !st.M.has(P.m[i])) return false;
+  if (st.p==='obs' && P.pm[i]) return false;
+  if (st.p==='mis' && !P.pm[i]) return false;
+  return isFinite(SC[st.strat][st.x][i]) && isFinite(SC[st.strat][st.y][i]);
+}
+const rangeCache = {};
+function axisRange(s,j){
+  const k=s+j; if (rangeCache[k]) return rangeCache[k];
+  const a = Array.from(SC[s][j]).filter(isFinite).sort((p,q)=>p-q);
+  const lo=a[Math.floor(a.length*.004)], hi=a[Math.floor(a.length*.996)], pad=(hi-lo)*.04;
+  return rangeCache[k]=[lo-pad,hi+pad];
+}
+function inBrush(i){
+  const b=st.brush; if(!b) return false;
+  const x=SC[st.strat][st.x][i], y=SC[st.strat][st.y][i];
+  return x>=Math.min(b.x0,b.x1)&&x<=Math.max(b.x0,b.x1)&&y>=Math.min(b.y0,b.y1)&&y<=Math.max(b.y0,b.y1);
+}
+function panels(){
+  if (st.facet==='o') return [0,1,2].filter(o=>st.O.has(o)).map(o=>({label:ORIG[o],fn:i=>P.o[i]===o}));
+  if (st.facet==='season') return [0,1,2,3].map(s=>({label:SEASONS[s],fn:i=>season(P.m[i])===s}));
+  if (st.facet==='pm') return [{label:'原本有值',fn:i=>!P.pm[i]},{label:'原本缺失',fn:i=>!!P.pm[i]}];
+  return [{label:'',fn:()=>true}];
+}
+function niceTicks(lo,hi,n){
+  const step0=(hi-lo)/n, mag=Math.pow(10,Math.floor(Math.log10(step0))), r=step0/mag;
+  const step=(r<1.5?1:r<3?2:r<7?5:10)*mag; const out=[];
+  for(let v=Math.ceil(lo/step)*step; v<=hi+1e-9; v+=step) out.push(+v.toFixed(6));
+  return out;
+}
+
+/* ---------- loadings ---------- */
+function aligned(cmpS, j){
+  const a=DATA.strat[st.strat].load, b=DATA.strat[cmpS].load; let dot=0;
+  for(let i=0;i<V.length;i++) dot+=a[i][j]*b[i][j];
+  return dot<0?-1:1;
+}
+function phi(s1,s2,j){
+  const a=DATA.strat[s1].load, b=DATA.strat[s2].load; let d=0,na=0,nb=0;
+  for(let i=0;i<V.length;i++){ d+=a[i][j]*b[i][j]; na+=a[i][j]**2; nb+=b[i][j]**2; }
+  return Math.abs(d)/Math.sqrt(na*nb);
+}
+function drawLoad(){
+  const svg=$('loadSvg'), L=DATA.strat[st.strat].load, x=st.x, y=st.y;
+  const col=css('--s'+st.strat), axis=css('--axis'), grid=css('--grid'), ink2=css('--ink2');
+  const show = v => st.groups.has(FLIGHT.has(v)?'flight':'weather');
+  let h=`<circle cx="0" cy="0" r="1" fill="none" stroke="${grid}" stroke-width=".008"/>
+    <circle cx="0" cy="0" r=".5" fill="none" stroke="${grid}" stroke-width=".006" stroke-dasharray=".03 .03"/>
+    <line x1="-1.15" y1="0" x2="1.15" y2="0" stroke="${axis}" stroke-width=".006"/>
+    <line x1="0" y1="-1.15" x2="0" y2="1.15" stroke="${axis}" stroke-width=".006"/>
+    <text x="1.24" y=".13" text-anchor="end" style="font-size:.075px;fill:${css('--muted')}">PC${x+1} →</text>
+    <text x="-.05" y="-1.2" text-anchor="end" style="font-size:.075px;fill:${css('--muted')}">↑ PC${y+1}</text>
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${col}"/></marker>`;
+  if (st.cmp!=='none') h+=`<marker id="ahc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${css('--s'+st.cmp)}"/></marker>`;
+  h+='</defs>';
+  if (st.cmp!=='none'){
+    const C=DATA.strat[st.cmp].load, sx=aligned(st.cmp,x), sy=aligned(st.cmp,y), cc=css('--s'+st.cmp);
+    V.forEach((v,i)=>{ if(!show(v)) return; h+=`<line x1="0" y1="0" x2="${C[i][x]*sx}" y2="${-C[i][y]*sy}" stroke="${cc}" stroke-width=".012" stroke-dasharray=".035 .025" marker-end="url(#ahc)" opacity=".95"/>`; });
+  }
+  V.forEach((v,i)=>{
+    if(!show(v)) return;
+    const lx=L[i][x], ly=-L[i][y], hv=st.hoverVar===v;
+    h+=`<line class="ml" data-v="${v}" x1="0" y1="0" x2="${lx}" y2="${ly}" stroke="${col}" stroke-width="${hv?.024:.014}" marker-end="url(#ah)"/>`;
+  });
+  // labels: push outward, avoid overlap by simple vertical nudging
+  const labs=V.map((v,i)=>({v,i,x:L[i][x],y:-L[i][y]})).filter(o=>show(o.v));
+  labs.forEach(o=>{ const r=Math.hypot(o.x,o.y)||1; o.tx=o.x+(o.x/r)*.08; o.ty=o.y+(o.y/r)*.08+.025; });
+  labs.sort((a,b)=>a.ty-b.ty);
+  for(let pass=0;pass<3;pass++){ labs.sort((a,b)=>a.ty-b.ty);
+    for(let k=1;k<labs.length;k++) for(let j=0;j<k;j++){ const a=labs[j],b=labs[k]; if(Math.abs(a.tx-b.tx)<.42&&Math.abs(a.ty-b.ty)<.085){ b.ty=a.ty+.085; } } }
+  labs.forEach(o=>{
+    const anchor=o.tx>0.05?'start':(o.tx<-0.05?'end':'middle'), hv=st.hoverVar===o.v;
+    h+=`<text class="lt" data-v="${o.v}" x="${o.tx}" y="${o.ty}" text-anchor="${anchor}" style="font-size:.075px;font-weight:${hv?700:400};fill:${hv?css('--ink'):ink2}">${VL[o.v]}</text>`;
+    h+=`<circle class="hot" data-v="${o.v}" cx="${o.x}" cy="${o.y}" r=".06" fill="transparent" style="cursor:pointer"/>`;
+  });
+  svg.innerHTML=h;
+  svg.querySelectorAll('.hot').forEach(c=>{
+    c.addEventListener('mouseenter',()=>{ setHoverVar(c.dataset.v); showLoadTip(c.dataset.v); });
+    c.addEventListener('mouseleave',()=>{ setHoverVar(null); hideTip(); });
+  });
+  const ev=DATA.strat[st.strat].ev, tot=ev.reduce((a,b)=>a+b,0);
+  let s=`<span><span class="sw" style="background:${col}"></span>${SN[st.strat]}：PC${x+1} 解釋 <b class="num">${(ev[x]/tot*100).toFixed(1)}%</b>、PC${y+1} <b class="num">${(ev[y]/tot*100).toFixed(1)}%</b></span>`;
+  if (st.cmp!=='none') s+=`<span><span class="sw" style="background:${css('--s'+st.cmp)}"></span>對照 ${SN[st.cmp]}：相似度 φ PC${x+1} <b class="num">${phi(st.strat,st.cmp,x).toFixed(3)}</b>、PC${y+1} <b class="num">${phi(st.strat,st.cmp,y).toFixed(3)}</b></span>`;
+  $('loadStats').innerHTML=s;
+}
+function setHoverVar(v){
+  st.hoverVar=v; const ink=css('--ink'), ink2=css('--ink2');
+  $('loadSvg').querySelectorAll('.ml').forEach(l=>l.setAttribute('stroke-width', l.dataset.v===v?'.024':'.014'));
+  $('loadSvg').querySelectorAll('.lt').forEach(t=>{ t.style.fontWeight=t.dataset.v===v?'700':'400'; t.style.fill=t.dataset.v===v?ink:ink2; });
+}
+const tip=$('tip');
+function hideTip(){ tip.hidden=true; }
+function showLoadTip(v){
+  const i=V.indexOf(v), L=DATA.strat[st.strat].load, x=st.x, y=st.y;
+  let h=`<div class="t">${VL[v]}（${v}）</div><div class="r"><span>${SN[st.strat]} PC${x+1}</span><span>${fmtS(L[i][x])}</span></div><div class="r"><span>${SN[st.strat]} PC${y+1}</span><span>${fmtS(L[i][y])}</span></div>`;
+  if (st.cmp!=='none'){ const C=DATA.strat[st.cmp].load, sx=aligned(st.cmp,x), sy=aligned(st.cmp,y);
+    h+=`<div class="r"><span>${SN[st.cmp]} PC${x+1}</span><span>${fmtS(C[i][x]*sx)}</span></div><div class="r"><span>${SN[st.cmp]} PC${y+1}</span><span>${fmtS(C[i][y]*sy)}</span></div>`; }
+  tip.innerHTML=h; tip.hidden=false;
+  const box=$('plotBox').getBoundingClientRect(), svgR=$('loadSvg').getBoundingClientRect();
+  const sc=svgR.width/2.6, px=svgR.left+(L[i][x]+1.3)*sc, py=svgR.top+(-L[i][y]+1.3)*sc;
+  tip.style.position='fixed'; tip.style.left=Math.min(px+14, window.innerWidth-270)+'px'; tip.style.top=(py+14)+'px';
+}
+
+/* ---------- scores ---------- */
+const cv=$('plot'), ctx=cv.getContext('2d');
+let geo=[], hoverI=-1, drag=null;
+function layout(){
+  const W=$('plotBox').clientWidth, ps=panels(), n=ps.length;
+  const cols = W<640 ? 1 : (n===4?2:n);
+  const rows=Math.ceil(n/cols);
+  const pw=W/cols, ph = n===1 ? Math.min(560,Math.max(320,W*.62)) : Math.min(340, Math.max(220, pw*.82));
+  const H=ph*rows, dpr=window.devicePixelRatio||1;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr); cv.style.height=H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const [xl,xh]=axisRange(st.strat,st.x), [yl,yh]=axisRange(st.strat,st.y);
+  geo=ps.map((p,k)=>{ const c=k%cols, r=Math.floor(k/cols); const L=c*pw+40, T=r*ph+(n>1?24:10), R=(c+1)*pw-10, B=(r+1)*ph-30;
+    return {...p,L,T,R,B,xl,xh,yl,yh, sx:v=>L+(v-xl)/(xh-xl)*(R-L), sy:v=>B-(v-yl)/(yh-yl)*(B-T), ix:px=>xl+(px-L)/(R-L)*(xh-xl), iy:py=>yl+(B-py)/(B-T)*(yh-yl)}; });
+  return {W,H};
+}
+function colorOf(i){
+  if (st.color==='pm') return P.pm[i]?C.mis:C.obs;
+  if (st.color==='o') return [C.o0,C.o1,C.o2][P.o[i]];
+  const t=Math.max(0,Math.min(1,(P.arr[i]+20)/140));
+  return seqColor(t);
+}
+const SEQ=[[205,226,251],[134,182,239],[57,135,229],[37,106,191],[24,79,149],[13,54,107]];
+function seqColor(t){ const k=t*(SEQ.length-1), a=Math.floor(k), b=Math.min(a+1,SEQ.length-1), f=k-a; const c=SEQ[a].map((v,j)=>Math.round(v+(SEQ[b][j]-v)*f)); return `rgb(${c[0]},${c[1]},${c[2]})`; }
+let C={};
+function drawScores(){
+  C={obs:css('--obs'),mis:css('--mis'),o0:css('--o0'),o1:css('--o1'),o2:css('--o2')};
+  const {W,H}=layout(); ctx.clearRect(0,0,W,H);
+  const grid=css('--grid'), axis=css('--axis'), muted=css('--muted'), ink=css('--ink'), brushC=css('--brush');
+  ctx.font='11px '+css('--ff');
+  const sx=SC[st.strat][st.x], sy=SC[st.strat][st.y];
+  let shown=0;
+  for(const g of geo){
+    ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.fillStyle=muted; ctx.textAlign='center';
+    for(const t of niceTicks(g.xl,g.xh,6)){ const X=g.sx(t); ctx.beginPath(); ctx.moveTo(X,g.T); ctx.lineTo(X,g.B); ctx.stroke(); ctx.fillText(t,X,g.B+14); }
+    ctx.textAlign='right';
+    for(const t of niceTicks(g.yl,g.yh,5)){ const Y=g.sy(t); ctx.beginPath(); ctx.moveTo(g.L,Y); ctx.lineTo(g.R,Y); ctx.stroke(); ctx.fillText(t,g.L-6,Y+4); }
+    ctx.strokeStyle=axis; ctx.beginPath(); ctx.moveTo(g.sx(0),g.T); ctx.lineTo(g.sx(0),g.B); ctx.moveTo(g.L,g.sy(0)); ctx.lineTo(g.R,g.sy(0)); ctx.stroke();
+    ctx.fillStyle=muted; ctx.textAlign='center'; ctx.fillText('PC'+(st.x+1),(g.L+g.R)/2,g.B+27);
+    ctx.save(); ctx.translate(g.L-30,(g.T+g.B)/2); ctx.rotate(-Math.PI/2); ctx.fillText('PC'+(st.y+1),0,0); ctx.restore();
+    // points: background context, then filtered (missing drawn last)
+    ctx.save(); ctx.beginPath(); ctx.rect(g.L,g.T,g.R-g.L,g.B-g.T); ctx.clip();
+    ctx.fillStyle=axis; ctx.globalAlpha=.10;
+    for(let i=0;i<N;i++){ if(!g.fn(i)||passes(i)||!isFinite(sx[i])) continue; ctx.fillRect(g.sx(sx[i])-1,g.sy(sy[i])-1,2,2); }
+    const order=[]; for(let i=0;i<N;i++) if(g.fn(i)&&passes(i)) order.push(i);
+    if (st.color==='pm') order.sort((a,b)=>P.pm[a]-P.pm[b]);
+    if (st.color==='arr') order.sort((a,b)=>P.arr[a]-P.arr[b]);
+    shown+=order.length;
+    const sel=!!st.brush;
+    for(const i of order){
+      const inb=sel&&inBrush(i);
+      ctx.globalAlpha = sel ? (inb?.85:.10) : (st.color==='pm'&&P.pm[i]?.75:(order.length>3000?.35:.6));
+      ctx.fillStyle=colorOf(i);
+      ctx.beginPath(); ctx.arc(g.sx(sx[i]),g.sy(sy[i]),inb?2.2:1.9,0,6.283); ctx.fill();
+    }
+    ctx.globalAlpha=1; ctx.restore();
+    if (g.label){ ctx.fillStyle=ink; ctx.textAlign='left'; ctx.font='600 12px '+css('--ff'); ctx.fillText(g.label+'　n='+order.length.toLocaleString(),g.L,g.T-8); ctx.font='11px '+css('--ff'); }
+    if (st.brush){ const b=st.brush; const x0=g.sx(Math.max(Math.min(b.x0,b.x1),g.xl)), x1=g.sx(Math.min(Math.max(b.x0,b.x1),g.xh)), y0=g.sy(Math.min(Math.max(b.y0,b.y1),g.yh)), y1=g.sy(Math.max(Math.min(b.y0,b.y1),g.yl));
+      ctx.strokeStyle=brushC; ctx.setLineDash([5,4]); ctx.lineWidth=1.5; ctx.strokeRect(x0,y0,x1-x0,y1-y0); ctx.setLineDash([]); }
+    if (drag&&drag.g===g){ ctx.strokeStyle=brushC; ctx.lineWidth=1; ctx.setLineDash([3,3]); ctx.strokeRect(drag.x0,drag.y0,drag.x1-drag.x0,drag.y1-drag.y0); ctx.setLineDash([]); }
+    if (hoverI>=0&&g.fn(hoverI)){ ctx.strokeStyle=ink; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(g.sx(sx[hoverI]),g.sy(sy[hoverI]),6,0,6.283); ctx.stroke(); }
+  }
+  $('nShown').textContent=`顯示 ${shown.toLocaleString()} / 樣本 ${N.toLocaleString()} 班`;
+  // legend
+  let lg='';
+  if (st.color==='pm') lg=`<span><span class="sw" style="background:${C.obs}"></span>氣壓原本有值</span><span><span class="sw" style="background:${C.mis}"></span>氣壓原本缺失</span>`;
+  else if (st.color==='o') lg=ORIG.map((o,k)=>`<span><span class="sw" style="background:${C['o'+k]}"></span>${o}</span>`).join('');
+  else lg=`<span style="display:inline-flex;align-items:center;gap:6px">抵達延誤 −20 分<span style="display:inline-block;width:120px;height:8px;border-radius:4px;background:linear-gradient(90deg,${seqColor(0)},${seqColor(.5)},${seqColor(1)})"></span>120 分以上</span>`;
+  lg+=`<span><span class="sw" style="background:${css('--axis')};opacity:.5"></span>不在篩選內（灰）</span>`;
+  $('colorLegend').innerHTML=lg;
+}
+function panelAt(px,py){ return geo.find(g=>px>=g.L&&px<=g.R&&py>=g.T&&py<=g.B); }
+function pos(e){ const r=cv.getBoundingClientRect(); return [e.clientX-r.left,e.clientY-r.top]; }
+cv.addEventListener('pointerdown',e=>{ const [px,py]=pos(e), g=panelAt(px,py); if(!g) return; drag={g,x0:px,y0:py,x1:px,y1:py}; cv.setPointerCapture(e.pointerId); hideTip(); });
+cv.addEventListener('pointermove',e=>{
+  const [px,py]=pos(e);
+  if (drag){ drag.x1=Math.max(drag.g.L,Math.min(drag.g.R,px)); drag.y1=Math.max(drag.g.T,Math.min(drag.g.B,py)); req(); return; }
+  const g=panelAt(px,py); if(!g){ if(hoverI>=0){hoverI=-1;hideTip();req();} return; }
+  const sx=SC[st.strat][st.x], sy=SC[st.strat][st.y]; let best=-1, bd=100;
+  for(let i=0;i<N;i++){ if(!g.fn(i)||!passes(i)) continue; const dx=g.sx(sx[i])-px, dy=g.sy(sy[i])-py, d=dx*dx+dy*dy; if(d<bd){bd=d;best=i;} }
+  if (best!==hoverI){ hoverI=best; req(); }
+  if (best>=0) showPtTip(best,e); else hideTip();
+});
+cv.addEventListener('pointerup',e=>{
+  if(!drag) return; const d=drag; drag=null;
+  if (Math.abs(d.x1-d.x0)<4&&Math.abs(d.y1-d.y0)<4){ st.brush=null; }
+  else { st.brush={x0:d.g.ix(d.x0),x1:d.g.ix(d.x1),y0:d.g.iy(d.y0),y1:d.g.iy(d.y1)}; }
+  st.q=null; sync();
+});
+cv.addEventListener('pointerleave',()=>{ if(!drag){ hoverI=-1; hideTip(); req(); } });
+function showPtTip(i,e){
+  const sx=SC[st.strat];
+  const praw=P.praw[i]===null?'<i>原本缺失</i>':fmt(P.praw[i]);
+  tip.innerHTML=`<div class="t">${ORIG[P.o[i]]} → ${P.dst[i]}　${P.c[i]}</div>
+   <div class="r"><span>日期／表定</span><span>2013-${String(P.m[i]).padStart(2,'0')}-${String(P.d[i]).padStart(2,'0')}　${P.h[i]} 時</span></div>
+   <div class="r"><span>抵達延誤</span><span>${P.arr[i]} 分</span></div><div class="r"><span>起飛延誤</span><span>${P.dep[i]} 分</span></div>
+   <div class="r"><span>濕度／能見度</span><span>${fmt(P.hum[i])}%　${fmt(P.vis[i],1)} mi</span></div>
+   <div class="r"><span>氣溫／降水</span><span>${fmt(P.temp[i])}°F　${fmt(P.pre[i],2)} in</span></div>
+   <div class="r"><span>氣壓 原始</span><span>${praw}</span></div><div class="r"><span>氣壓 D 補值</span><span>${fmt(P.pD[i])} mb</span></div>
+   <div class="r"><span>PC${st.x+1}／PC${st.y+1}</span><span>${fmtS(sx[st.x][i])}　${fmtS(sx[st.y][i])}</span></div>`;
+  tip.hidden=false; tip.style.position='absolute';
+  const box=$('plotBox').getBoundingClientRect(), x=e.clientX-box.left, y=e.clientY-box.top;
+  tip.style.left=(x+260>box.width? x-262 : x+14)+'px'; tip.style.top=Math.max(0,y-10)+'px';
+}
+let raf=0; function req(){ if(!raf) raf=requestAnimationFrame(()=>{raf=0;drawScores();}); }
+
+/* ---------- read-outs ---------- */
+function median(a){ if(!a.length) return NaN; const s=Float64Array.from(a).sort(); const m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; }
+function stats(idx){
+  const n=idx.length; if(!n) return null;
+  let pm=0,arr=[],hum=0,hn=0,vis=0,vn=0,tmp=0,tn=0,rain=0,rn=0;
+  for(const i of idx){ pm+=P.pm[i]; arr.push(P.arr[i]);
+    if(P.hum[i]!==null){hum+=P.hum[i];hn++;} if(P.vis[i]!==null){vis+=P.vis[i];vn++;} if(P.temp[i]!==null){tmp+=P.temp[i];tn++;} if(P.pre[i]!==null){rain+=P.pre[i]>0?1:0;rn++;} }
+  return {n, pm:pm/n*100, arrM:arr.reduce((a,b)=>a+b,0)/n, arrMed:median(arr), hum:hum/hn, vis:vis/vn, temp:tmp/tn, rain:rain/rn*100};
+}
+function drawReads(){
+  const F=[], B=[];
+  for(let i=0;i<N;i++){ if(!passes(i)) continue; F.push(i); if(st.brush&&inBrush(i)) B.push(i); }
+  const a=stats(F), b=st.brush?stats(B):null;
+  const row=(l,k,d,u='')=>`<tr><td>${l}</td><td class="num">${a?fmt(a[k],d)+u:'—'}</td><td class="num">${b?fmt(b[k],d)+u:'—'}</td></tr>`;
+  $('sumTbl').innerHTML=`<tr><th></th><th>目前篩選</th><th>框選範圍</th></tr>`+
+    `<tr><td>航班數（樣本）</td><td class="num">${a?a.n.toLocaleString():'—'}</td><td class="num">${b?b.n.toLocaleString():'—'}</td></tr>`+
+    row('氣壓原本缺失','pm',1,'%')+row('抵達延誤 平均','arrM',1,' 分')+row('抵達延誤 中位數','arrMed',0,' 分')+
+    row('濕度 平均','hum',1,'%')+row('能見度 平均','vis',2,' mi')+row('氣溫 平均','temp',1,'°F')+row('有降水','rain',1,'%');
+  // month bars
+  const cnt=(idx)=>{ const c=new Array(12).fill(0); idx.forEach(i=>c[P.m[i]-1]++); const n=idx.length||1; return c.map(v=>v/n*100); };
+  const fa=cnt(F), fb=st.brush?cnt(B):null, mx=Math.max(...fa,...(fb||[0]),1);
+  const W=420,H=210,L=30,R=8,T=10,Bt=26, bw=(W-L-R)/12, sc=v=>(H-Bt)-v/mx*(H-Bt-T);
+  let h=''; const ticks=niceTicks(0,mx,4);
+  ticks.forEach(t=>{ h+=`<line x1="${L}" x2="${W-R}" y1="${sc(t)}" y2="${sc(t)}" stroke="${css('--grid')}"/><text x="${L-4}" y="${sc(t)+4}" text-anchor="end">${t}%</text>`; });
+  for(let m=0;m<12;m++){
+    const x=L+m*bw, w=fb?(bw-6)/2:bw-6;
+    h+=`<rect x="${x+3}" y="${sc(fa[m])}" width="${w}" height="${(H-Bt)-sc(fa[m])}" rx="2" fill="${css('--barAll')}"><title>${m+1} 月 目前篩選 ${fa[m].toFixed(1)}%</title></rect>`;
+    if(fb) h+=`<rect x="${x+3+w+1}" y="${sc(fb[m])}" width="${w-1}" height="${(H-Bt)-sc(fb[m])}" rx="2" fill="${css('--barSel')}"><title>${m+1} 月 框選 ${fb[m].toFixed(1)}%</title></rect>`;
+    h+=`<text x="${x+bw/2}" y="${H-8}" text-anchor="middle">${m+1}</text>`;
+  }
+  h+=`<line x1="${L}" x2="${W-R}" y1="${H-Bt}" y2="${H-Bt}" stroke="${css('--axis')}"/>`;
+  $('monthSvg').innerHTML=h;
+  // group table from the full-data cube
+  const s=st.strat, g={0:{n:0,arr:0,hum:0,humn:0,ns:0,sx:0,sy:0},1:{n:0,arr:0,hum:0,humn:0,ns:0,sx:0,sy:0}};
+  for(const c of DATA.cube){ if(!st.O.has(c.o)||!st.M.has(c.m)) continue; const t=g[c.pm]; t.n+=c.n; t.arr+=c.arr; t.hum+=c.hum; t.humn+=c.humn; t.ns+=c['n'+s]; t.sx+=c['s'+s][st.x]; t.sy+=c['s'+s][st.y]; }
+  const sel=[...st.M].sort((p,q)=>p-q), mtxt=sel.length===12?'全年':sel.join('、')+' 月', otxt=[...st.O].sort().map(o=>ORIG[o]).join('、');
+  $('grpHint').textContent=`${otxt} · ${mtxt}（不受框選與氣壓篩選影響）`;
+  const r=(lab,t)=>`<tr><td>${lab}</td><td class="num">${t.n.toLocaleString()}</td><td class="num">${t.n?fmt(t.arr/t.n,1):'—'}</td><td class="num">${t.humn?fmt(t.hum/t.humn,1):'—'}</td><td class="num">${t.ns?fmtS(t.sx/t.ns):'—'}</td><td class="num">${t.ns?fmtS(t.sy/t.ns):'—'}</td></tr>`;
+  $('grpTbl').innerHTML=`<tr><th>氣壓</th><th>航班數</th><th>抵達延誤</th><th>濕度%</th><th>PC${st.x+1}</th><th>PC${st.y+1}</th></tr>`+r('原本有值',g[0])+r('原本缺失',g[1]);
+}
+
+/* ---------- sync ---------- */
+function syncPressed(){
+  const set=(el,v)=>el.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.v===v)));
+  set($('segStrat'),st.strat); set($('segColor'),st.color); set($('segFacet'),st.facet); set($('segP'),st.p);
+  $('chipsO').querySelectorAll('button').forEach((b,i)=>b.setAttribute('aria-pressed',String(st.O.has(i))));
+  $('chipsM').querySelectorAll('button').forEach((b,i)=>b.setAttribute('aria-pressed',String(st.M.has(i+1))));
+  groupsEl.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(st.groups.has(b.dataset.g))));
+  $('qrail').querySelectorAll('button').forEach((b,i)=>b.setAttribute('aria-pressed',String(st.q===i)));
+  $('selX').value=st.x; $('selY').value=st.y;
+  const cmp=$('selCmp'); cmp.innerHTML='<option value="none">無</option>'+'ABCD'.split('').filter(s=>s!==st.strat).map(s=>`<option value="${s}">${SN[s]}</option>`).join(''); cmp.value=st.cmp;
+}
+function sync(){
+  syncPressed(); drawLoad(); drawScores(); drawReads();
+  if (st.q!==null){ $('qText').textContent='Q'+(st.q+1)+'　'+QS[st.q].t; $('aText').textContent=QS[st.q].a; if(st.hoverVar) requestAnimationFrame(()=>showLoadTip(st.hoverVar)); }
+  else { $('qText').textContent='自由探索'; $('aText').textContent='目前的畫面由你的操作決定。框選、篩選或切分後，下方三張表會跟著更新。'; hideTip(); }
+}
+window.addEventListener('resize',()=>req());
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>sync());
+new MutationObserver(()=>sync()).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+window.__applyQ=applyQ;
+window.__findPt=(pmv,minArr,minX)=>{ const sx=SC[st.strat][st.x], sy=SC[st.strat][st.y];
+  for(const g of geo) for(let i=0;i<N;i++){ if(g.fn(i)&&passes(i)&&P.pm[i]===pmv&&P.arr[i]>=minArr&&sx[i]>=(minX??-99)){ const X=g.sx(sx[i]),Y=g.sy(sy[i]); if(X>g.L+60&&X<g.R-60&&Y>g.T+40&&Y<g.B-40) return [X,Y]; } } return null; };
+window.__state=()=>({brush:st.brush,q:st.q});
+applyQ(2);
+})();
+</script>

@@ -1,0 +1,208 @@
+---
+title: "PCA探索code"
+author: "林沛萱"
+date: "2026-11-03"
+output:
+  html_document:
+    toc: true
+    self_contained: true
+  pdf_document:
+    latex_engine: xelatex
+CJKmainfont: "Microsoft JhengHei"
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = "figures_pca/")
+```
+
+```{r, message=FALSE,warning=FALSE}
+library(tidyverse)
+library(plotly)
+library(crosstalk)
+library(htmltools)
+library(ggplot2)
+library(knitr)
+load("pca_objects.RData")
+
+```
+
+```{r part6,echo=TRUE}
+# 載入主檔案存下的物件；找不到就說明原因
+if (!exists("ref_name")) {
+  rdata = "pca_objects.RData"
+  if (!file.exists(rdata)) {
+    stop("找不到 ", rdata, "。請先在主檔案 part5 最後執行 save(...)，",
+         "並把檔案放到這個資料夾：", getwd())
+  }
+  load(rdata)
+}
+stopifnot(exists("strategies"), exists("analysis_data"), exists("pca_list"), exists("ref_name"))
+
+main_name = ref_name                         # "D"
+pca_main  = pca_list[[main_name]]
+data_main = strategies[[main_name]]
+stopifnot(nrow(data_main) == nrow(analysis_data))   # D 與 analysis_data 列數、順序相同
+
+pal_status = c("原本有值" = "#2a78d6", "原本缺失" = "#eb6834")
+pal_origin = c("EWR" = "#2a78d6", "JFK" = "#eb6834", "LGA" = "#1baf7a")
+
+# ---------- 1. 負荷量圖：hover 看數值、點圖例篩選變數群組、與策略 A 對照 ----------
+to_loading = function(p, ref_rot = NULL) {
+  rot = p$rotation[, 1:5]
+  if (!is.null(ref_rot)) {                  # 正負號對齊基準策略
+    s = sign(colSums(rot * ref_rot)); s[s == 0] = 1
+    rot = sweep(rot, 2, s, "*")
+  }
+  out = as.data.frame(rot %*% diag(p$sdev[1:5]))
+  colnames(out) = paste0("PC", 1:5)
+  out$variable = rownames(p$rotation)
+  out
+}
+load_main = to_loading(pca_main)
+load_A    = to_loading(pca_list$A, pca_main$rotation[, 1:5])
+load_main$group = ifelse(load_main$variable %in% flight_vars, "飛行指標", "天氣指標")
+load_main$A_PC1 = load_A$PC1
+load_main$A_PC2 = load_A$PC2
+load_main$zero  = 0
+load_A$zero     = 0
+
+load_main$hover = paste0("<b>", load_main$variable, "</b>",
+                         "<br>策略 ", main_name, "：PC1 ", sprintf("%.2f", load_main$PC1),
+                         "，PC2 ", sprintf("%.2f", load_main$PC2),
+                         "<br>策略 A：PC1 ", sprintf("%.2f", load_main$A_PC1),
+                         "，PC2 ", sprintf("%.2f", load_main$A_PC2))
+
+circle = data.frame(x = cos(seq(0, 2 * pi, length.out = 200)),
+                    y = sin(seq(0, 2 * pi, length.out = 200)))
+
+loading_plot = plot_ly() %>%
+  add_paths(data = circle, x = ~x, y = ~y, line = list(color = "grey80", dash = "dot"),
+            hoverinfo = "none", showlegend = FALSE) %>%
+  add_segments(data = load_A, x = ~zero, y = ~zero, xend = ~PC1, yend = ~PC2,
+               line = list(color = "#eb6834", dash = "dash", width = 1.5),
+               name = "策略 A（對照）", hoverinfo = "none") %>%
+  add_segments(data = load_main, x = ~zero, y = ~zero, xend = ~PC1, yend = ~PC2,
+               split = ~group, legendgroup = ~group, showlegend = FALSE,
+               line = list(color = "#2a78d6", width = 2.5), hoverinfo = "none") %>%
+  add_trace(data = load_main, x = ~PC1, y = ~PC2, type = "scatter", mode = "markers+text",
+            split = ~group, legendgroup = ~group,
+            text = ~variable, textposition = "top center",
+            marker = list(size = 9, color = "#2a78d6"),
+            hovertext = ~hover, hoverinfo = "text") %>%
+  plotly::layout(title = paste0("策略 ", main_name, " 的負荷量（實線）vs 策略 A（虛線）"),
+                 xaxis = list(title = "PC1 負荷量", range = c(-1.15, 1.15), zeroline = TRUE),
+                 yaxis = list(title = "PC2 負荷量", range = c(-1.15, 1.15), zeroline = TRUE,
+                              scaleanchor = "x", scaleratio = 1),
+                 legend = list(title = list(text = "點圖例可隱藏")))
+loading_plot
+
+# 相似度（Tucker φ）：負荷量圖上兩組箭頭有多接近
+round(abs(colSums(pca_list$A$rotation[, 1:5] * pca_main$rotation[, 1:5])), 3)
+
+# ---------- 2. 準備分數資料 ----------
+scores = data_main
+scores$PC1 = pca_main$x[, 1]
+scores$PC2 = pca_main$x[, 2]
+scores$PC3 = pca_main$x[, 3]
+scores$p_status = factor(ifelse(is.na(analysis_data$pressure), "原本缺失", "原本有值"),
+                         levels = c("原本有值", "原本缺失"))
+scores$season = factor(c("冬", "冬", "春", "春", "春", "夏", "夏", "夏", "秋", "秋", "秋", "冬")[scores$month_flight],
+                       levels = c("冬", "春", "夏", "秋"))
+
+scores$hover = paste0(
+  "<b>", scores$origin, " → ", scores$dest, "</b>　", scores$carrier,
+  "<br>日期：2013-", scores$month_flight, "-", scores$day_flight,
+  "<br>抵達延誤：", scores$arr_delay, " 分　起飛延誤：", scores$dep_delay, " 分",
+  "<br>濕度：", round(scores$humid, 1), "%　能見度：", round(scores$visib, 1), " mi",
+  "<br>氣壓原始：", ifelse(is.na(analysis_data$pressure), "缺失", round(analysis_data$pressure, 1)),
+  "　補值後：", round(scores$pressure, 1), " mb",
+  "<br>PC1 ", round(scores$PC1, 2), "　PC2 ", round(scores$PC2, 2), "　PC3 ", round(scores$PC3, 2))
+
+set.seed(123)
+samp = scores[sample.int(nrow(scores), 6000), ]
+samp$key = seq_len(nrow(samp))
+
+# ---------- 3. 連動篩選 + 框選（crosstalk）----------
+# 在分數圖上用 Box Select / Lasso 框選，右邊的月份與延誤直方圖只會亮起框內航班；
+# 左邊的篩選器會同時作用在三張圖
+shared = highlight_key(samp, ~key, group = "flights")
+
+p_score = plot_ly(shared, x = ~PC1, y = ~PC2, color = ~p_status, colors = pal_status,
+                  type = "scatter", mode = "markers", marker = list(size = 5, opacity = 0.55),
+                  text = ~hover, hoverinfo = "text") %>%
+  plotly::layout(xaxis = list(title = "PC1"), yaxis = list(title = "PC2"), dragmode = "select")
+
+p_month = plot_ly(shared, x = ~month_flight, type = "histogram",
+                  marker = list(color = "#b9c0c7"), showlegend = FALSE) %>%
+  plotly::layout(xaxis = list(title = "月份", dtick = 1), yaxis = list(title = "航班數"))
+
+p_delay = plot_ly(shared, x = ~arr_delay, type = "histogram", nbinsx = 60,
+                  marker = list(color = "#b9c0c7"), showlegend = FALSE) %>%
+  plotly::layout(xaxis = list(title = "抵達延誤（分）", range = c(-60, 240)), yaxis = list(title = "航班數"))
+
+linked = subplot(p_score,
+                 subplot(p_month, p_delay, nrows = 2, titleX = TRUE, titleY = TRUE, margin = 0.08),
+                 widths = c(0.62, 0.38), titleX = TRUE, titleY = TRUE, margin = 0.05) %>%
+  plotly::layout(title = "框選分數圖 → 看框內航班的月份與延誤") %>%
+  highlight(on = "plotly_selected", off = "plotly_deselect",
+            color = "#15191e", opacityDim = 0.25, persistent = FALSE)
+
+dashboard = bscols(widths = c(3, 9),
+                   list(
+                     filter_checkbox("f_origin", "機場", shared, ~origin, inline = TRUE),
+                     filter_select("f_month", "月份（可多選）", shared, ~month_flight),
+                     filter_checkbox("f_status", "氣壓原始狀態", shared, ~p_status),
+                     filter_slider("f_pc1", "PC1 範圍", shared, ~PC1, step = 0.5)
+                   ),
+                   linked)
+dashboard
+
+# 存成可分享的 HTML（作業的「已發佈 dashboard」可以用這個檔，或用 RPubs 發佈）
+save_html(dashboard, "pca_interactive_dashboard.html")
+
+# ---------- 4. 依子群體切開（small multiples）----------
+facet_plot = function(var, title) {
+  samp %>%
+    split(samp[[var]]) %>%
+    lapply(function(d) {
+      plot_ly(d, x = ~PC1, y = ~PC2, color = ~p_status, colors = pal_status,
+              type = "scatter", mode = "markers", marker = list(size = 4, opacity = 0.5),
+              text = ~hover, hoverinfo = "text", legendgroup = ~p_status,
+              showlegend = identical(as.character(d[[var]][1]),
+                                     as.character(sort(unique(samp[[var]]))[1]))) %>%
+        plotly::layout(annotations = list(list(text = paste0("<b>", d[[var]][1], "</b>　n=", nrow(d)),
+                                               xref = "paper", yref = "paper", x = 0, y = 1.08,
+                                               showarrow = FALSE, xanchor = "left")))
+    }) %>%
+    subplot(nrows = 1, shareX = TRUE, shareY = TRUE, titleX = TRUE) %>%
+    plotly::layout(title = title)
+}
+facet_plot("p_status", "依氣壓原始狀態切開：缺失組集中在 PC1 右側")
+facet_plot("origin",   "依機場切開：三個機場的缺失圖樣一致")
+facet_plot("season",   "依季節切開：PC1 高分集中在夏季")
+
+# ---------- 5. 用數字驗證互動操作看到的現象（全資料，不是抽樣）----------
+# Q3：缺失組在 PC1 的位置
+aggregate(cbind(PC1, PC2, arr_delay, humid) ~ p_status, data = scores, FUN = mean)
+tapply(scores$PC1 > 1, scores$p_status, mean)                 # PC1 > 1 的比例
+
+# Q4：三個機場是否一致；PC2 為何分開
+aggregate(cbind(PC1, arr_delay) ~ origin + p_status, data = scores, FUN = mean)
+aggregate(cbind(PC2, distance) ~ origin, data = scores, FUN = mean)
+
+# Q5：固定 LGA、5 月
+lga_may = subset(scores, origin == "LGA" & month_flight == 5)
+table(lga_may$p_status)
+aggregate(cbind(PC1, arr_delay, humid) ~ p_status, data = lga_may, FUN = mean)
+
+# Q6：框選 PC1 > 2 的航班
+hi = subset(scores, PC1 > 2)
+c(航班數 = nrow(hi), 原本缺失比例 = mean(hi$p_status == "原本缺失") * 100,
+  抵達延誤平均 = mean(hi$arr_delay), 濕度平均 = mean(hi$humid), 能見度平均 = mean(hi$visib))
+round(prop.table(table(hi$month_flight)) * 100, 1)
+
+# Q7：框選 PC3 < -2 的航班（低溫型延誤）
+lo3 = subset(scores, PC3 < -2)
+c(航班數 = nrow(lo3), 抵達延誤平均 = mean(lo3$arr_delay), 氣溫平均 = mean(lo3$temp))
+round(prop.table(table(lo3$month_flight)) * 100, 1)

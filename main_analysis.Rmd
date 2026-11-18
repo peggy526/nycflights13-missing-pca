@@ -1,0 +1,650 @@
+---
+title: "期中報告code"
+author: "林沛萱"
+date: "2026-11-02"
+output:
+  html_document:
+    toc: true
+    self_contained: true
+  pdf_document:
+    latex_engine: xelatex
+CJKmainfont: "Microsoft JhengHei"
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE ,fig.path = "figures/")
+```
+
+```{r, message=FALSE,warning=FALSE}
+library(tidyverse)
+library(nycflights13)
+library(naniar)
+library(plotly)
+library(knitr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(crosstalk)
+library(htmltools)
+
+```
+
+```{r part1,echo=TRUE}
+data("flights", package = "nycflights13")
+data("weather", package = "nycflights13")
+dim(flights)
+dim(weather)
+
+names(flights)
+names(weather)
+
+anyDuplicated(weather[c("origin", "time_hour")]) 
+
+flight_data = flights %>%
+  left_join(weather, by = c("origin", "time_hour"),
+    suffix = c("_flight", "_weather") 
+  )
+
+dim(flight_data)
+glimpse(flight_data)
+
+write.csv(
+  flight_data,
+  "flight_data_merged.csv",
+  row.names = FALSE
+)
+
+
+date = as.Date(
+  paste(flight_data$year_flight,
+        flight_data$month_flight,
+        flight_data$day_flight,
+        sep = "-")
+)
+
+flight_data$day_of_week =
+  as.integer(format(date, "%u"))
+
+hour = flight_data$sched_dep_time %/% 100
+
+flight_data$time_period = ifelse(
+  hour >= 5 & hour < 12, "Morning",
+  ifelse(
+    hour >= 12 & hour < 18, "Afternoon",
+    ifelse(
+      hour >= 18 & hour < 24, "Evening",
+      "Night"
+    )
+  )
+)
+
+
+continuous_vars = c(
+  "dep_delay",
+  "arr_delay",
+  "air_time",
+  "distance",
+  "temp",
+  "dewp",
+  "humid",
+  "wind_speed",
+  "precip",
+  "visib",
+  "pressure"
+)
+
+continuous_data = flight_data[, continuous_vars]
+
+
+categorical_vars = c(
+  "origin",
+  "carrier",
+  "dest",
+  "month_flight",
+  "day_of_week",
+  "time_period"
+)
+
+categorical_data = flight_data[, categorical_vars]
+categorical_data[] = lapply(
+  categorical_data,
+  as.factor
+)
+
+str(categorical_data)
+
+flight_analysis = data.frame(
+  continuous_data,
+  categorical_data
+)
+dim(flight_analysis);head(flight_analysis);colSums(is.na(flight_analysis))
+
+round(
+  colMeans(is.na(flight_analysis)) * 100,
+  2
+)
+
+```
+
+```{r part2,echo=TRUE}
+M = is.na(flight_analysis)
+co_missing = t(M) %*% M
+co_missing
+
+continuous_vars = c(
+  "dep_delay", "arr_delay", "air_time",
+  "distance", "temp", "dewp", "humid",
+  "wind_speed", "precip", "visib", "pressure"
+)
+M_cont = is.na(flight_analysis[, continuous_vars])
+M_cont = M_cont[, colSums(M_cont) > 0, drop = FALSE]
+co_missing = t(M_cont) %*% M_cont
+print(co_missing)
+
+
+sum(is.na(flight_analysis$arr_delay) &
+      is.na(flight_analysis$air_time))
+sum(is.na(flight_analysis$dep_delay) &
+      is.na(flight_analysis$arr_delay))
+sum(is.na(flight_analysis$pressure) &
+      is.na(flight_analysis$temp))
+sum(is.na(flight_analysis$pressure) &
+      !is.na(flight_analysis$temp))
+
+table(
+  Pressure_NA = is.na(flight_analysis$pressure),
+  Temp_NA = is.na(flight_analysis$temp)
+)
+table(
+  ArrDelay_NA = is.na(flight_analysis$arr_delay),
+  AirTime_NA = is.na(flight_analysis$air_time)
+)
+
+co_prop = co_missing / nrow(M_cont)
+co_cond = sweep(co_missing, 1, diag(co_missing), "/")
+
+pal = colorRampPalette(c("white", "red"))(100)  
+heatmap(
+  co_prop,
+  Rowv = NA, Colv = "Rowv",      
+  col = pal,
+  margins = c(9, 9),
+  main = "Co-missingness Heatmap (joint proportion)"
+)
+heatmap(
+  co_cond,
+  Rowv = NA, Colv = "Rowv",
+  scale = "none",
+  col = pal,
+  margins = c(9, 9),
+  main = "Conditional Co-missingness "
+)
+
+
+sum(is.na(flights$dep_time))
+
+table(
+  DepTime_NA = is.na(flights$dep_time),
+  ArrDelay_NA = is.na(flights$arr_delay)
+)
+
+sum(is.na(flights$dep_delay))
+sum(is.na(flights$arr_delay))
+all(
+  is.na(flights$dep_time) ==
+    is.na(flights$dep_delay)
+)
+
+table(
+  DepTime_NA  = is.na(flights$dep_time),
+  DepDelay_NA = is.na(flights$dep_delay)
+)
+
+colSums(is.na(weather[, c(
+  "temp", "dewp", "humid",
+  "wind_speed", "precip",
+  "visib", "pressure"
+)]))
+nrow(weather)
+
+#確認有多少航班沒有配對到天氣資料
+flight_key = paste(
+  flights$origin,
+  flights$time_hour
+)
+weather_key = paste(
+  weather$origin,
+  weather$time_hour
+)
+unmatched = !(flight_key %in% weather_key)
+sum(unmatched)
+round(mean(unmatched) * 100, 2)
+```
+
+```{r part3,echo=TRUE}
+pressure_missing = is.na(flight_analysis$pressure)
+pressure_by_origin = tapply(
+  pressure_missing,
+  flight_analysis$origin,
+  mean
+) * 100
+round(pressure_by_origin, 2)
+
+chisq.test(
+  table(
+    flight_analysis$origin,
+    is.na(flight_analysis$pressure)
+  )
+)
+
+pressure_by_month = tapply(
+  is.na(flight_analysis$pressure),
+  flight_analysis$month_flight,
+  mean
+) * 100
+round(pressure_by_month, 2)
+chisq.test(
+  table(
+    flight_analysis$month_flight,
+    is.na(flight_analysis$pressure)
+  )
+)
+
+tapply(
+  flight_analysis$temp,
+  is.na(flight_analysis$pressure),
+  mean,
+  na.rm = TRUE
+)
+
+
+continuous_vars = c(
+  "dep_delay", "arr_delay", "air_time",
+  "temp", "dewp", "humid",
+  "wind_speed", "precip", "visib", "pressure"
+)
+M = is.na(flight_analysis[, continuous_vars])
+co_missing = t(M) %*% M
+missing_count = colSums(M)
+co_rate = sweep(co_missing, 1, missing_count, "/")
+
+heatmap(
+  co_rate,
+  Rowv = NA,
+  Colv = NA,
+  scale = "none",
+  col = colorRampPalette(c("white", "yellow", "red"))(100),
+  breaks = seq(0, 1, length.out = 101),
+  margins = c(9, 9),
+  main = "Conditional Co-missingness Heatmap"
+)
+colnames(co_rate)
+dim(co_rate)
+
+vars = c(
+  "dep_delay", "arr_delay", "air_time",
+  "distance", "temp", "dewp", "humid",
+  "wind_speed", "precip", "visib", "pressure"
+)
+M = is.na(flight_analysis[, vars])
+M = M[, colSums(M) > 0, drop = FALSE]   
+vars2 = colnames(M)
+
+set.seed(123)
+sample_id = sample(nrow(M), min(2000, nrow(M)))
+M_sample = M[sample_id, , drop = FALSE]
+
+
+M_sorted = M_sample[do.call(order, as.data.frame(-M_sample * 1)), , drop = FALSE]
+n = nrow(M_sorted)
+
+par(mar = c(9, 5, 4, 2), xpd = FALSE)
+image(
+  x = 1:ncol(M_sorted),
+  y = 1:n,
+  z = t(M_sorted[n:1, , drop = FALSE]) * 1,   
+  col = c("grey90", "red"),
+  xlab = "", ylab = "Flights (random sample, sorted by pattern)",
+  main = "Missingness Matrix", axes = FALSE
+)
+axis(1, at = 1:ncol(M_sorted), labels = vars2, las = 2, cex.axis = 0.8)
+axis(2)
+box()
+
+
+par(xpd = TRUE)
+legend("bottom", inset = c(0, -0.42), horiz = TRUE,
+       legend = c("Observed", "Missing"),
+       fill = c("grey90", "red"), bty = "n")
+par(mar = c(5, 4, 4, 2) + 0.1, xpd = FALSE)
+
+pressure_group = factor(
+  ifelse(is.na(flight_analysis$pressure), "Missing", "Observed"),
+  levels = c("Missing", "Observed")
+)
+table(pressure_group)
+
+
+compare_vars = c(
+  "dep_delay", "arr_delay", "air_time",
+  "distance", "temp", "dewp", "humid",
+  "wind_speed", "precip", "visib"
+)
+
+compare_one = function(v) {
+  x = flight_analysis[[v]][pressure_group == "Missing"]
+  y = flight_analysis[[v]][pressure_group == "Observed"]
+  x = x[!is.na(x)]; y = y[!is.na(y)]
+  
+  sd_pool = sqrt(((length(x) - 1) * var(x) + (length(y) - 1) * var(y)) /
+                   (length(x) + length(y) - 2))
+  
+  data.frame(
+    variable   = v,
+    n_missing  = length(x),
+    n_observed = length(y),
+    mean_miss  = round(mean(x), 2),
+    mean_obs   = round(mean(y), 2),
+    med_miss   = round(median(x), 2),
+    med_obs    = round(median(y), 2),
+    SMD        = round((mean(x) - mean(y)) / sd_pool, 3),
+    p_wilcox   = signif(wilcox.test(x, y)$p.value, 3)
+  )
+}
+
+
+compare_table = do.call(rbind, lapply(compare_vars, compare_one))
+print(compare_table)
+
+cat_vars = c("origin", "carrier", "month_flight", "day_of_week", "time_period")
+
+for (v in cat_vars) {
+  cat("\n====", v, "====\n")
+  tab = table(flight_analysis[[v]], pressure_group)
+  print(round(prop.table(tab, 1), 3))          
+  print(chisq.test(tab))
+}
+
+
+box_vars = c("arr_delay", "dep_delay", "air_time", "temp")
+par(mfrow = c(2, 2))
+for (v in box_vars) {
+  boxplot(
+    flight_analysis[[v]] ~ pressure_group,
+    col = c("red", "lightblue"),
+    outline = FALSE,                 
+    xlab = "Pressure Missing Status",
+    ylab = v,
+    main = paste(v, "by Pressure Missing Status")
+  )
+}
+par(mfrow = c(1, 1))
+
+delay_summary = tapply(
+  flight_analysis$arr_delay,
+  pressure_group,
+  function(x) {
+    c(
+      Median = median(x, na.rm = TRUE),
+      Q1 = quantile(x, 0.25, na.rm = TRUE),
+      Q3 = quantile(x, 0.75, na.rm = TRUE),
+      IQR = IQR(x, na.rm = TRUE)
+    )
+  }
+)
+
+delay_summary
+
+cramers_v = function(x, y) {
+  tab = table(x, y)
+  as.numeric(sqrt(chisq.test(tab)$statistic / (sum(tab) * (min(dim(tab)) - 1))))
+}
+p_na = is.na(flight_analysis$pressure)
+c(origin = cramers_v(flight_analysis$origin, p_na),          
+  month  = cramers_v(flight_analysis$month_flight, p_na))
+
+compare_table %>%
+  mutate(variable = reorder(variable, abs(SMD))) %>%
+  ggplot(aes(SMD, variable)) +
+  annotate("rect", xmin = -0.2, xmax = 0.2, ymin = -Inf, ymax = Inf, fill = "grey92") +
+  geom_vline(xintercept = 0, colour = "grey60") +
+  geom_segment(aes(x = 0, xend = SMD, yend = variable), colour = "#2a78d6", linewidth = 1) +
+  geom_point(size = 3, colour = "#2a78d6") +
+  geom_text(aes(label = sprintf("%+.2f", SMD)), nudge_y = 0.35, size = 3) +
+  labs(x = "SMD (pressure missing - observed)", y = NULL) +
+  theme_minimal()
+
+
+```
+
+```{r part4,echo=TRUE}
+dat =flight_data
+dat$no_departure     = is.na(dat$dep_time)
+dat$pressure_missing = is.na(dat$pressure)
+
+flight_vars  = c("dep_delay", "arr_delay", "air_time", "distance")
+weather_vars= c("temp", "dewp", "humid", "wind_speed", "precip", "visib", "pressure")
+numeric_vars = c(flight_vars, weather_vars)
+
+core_complete = complete.cases(dat[flight_vars])
+analysis_data = dat[!dat$no_departure & core_complete, ]
+
+
+data_A = analysis_data[complete.cases(analysis_data[numeric_vars]), ]
+
+
+data_B = analysis_data
+for (v in weather_vars) {
+  idx <- is.na(analysis_data[[v]])
+  data_B[[v]][idx] <- median(analysis_data[[v]], na.rm = TRUE)
+}
+
+
+month_var = if ("month_flight" %in% names(analysis_data)) "month_flight" else "month"
+grp = interaction(analysis_data$origin, analysis_data[[month_var]], drop = TRUE)
+
+p0      = analysis_data$pressure              
+grp_med = ave(p0, grp, FUN = function(z) median(z, na.rm = TRUE))
+p_miss  = is.na(p0)
+n_fallback = sum(p_miss & is.na(grp_med))    
+grp_med[is.na(grp_med)] = median(p0, na.rm = TRUE)
+
+data_C = data_B
+data_C$pressure[p_miss] = grp_med[p_miss]
+
+c(pressure_imputed = sum(p_miss), fallback = n_fallback)
+
+t_min = min(weather$time_hour)
+t_max = max(weather$time_hour)          
+ 
+grid = weather %>%
+  select(origin, time_hour, pressure) %>%
+  group_by(origin) %>%
+  complete(time_hour = seq(t_min, t_max, by = "hour")) %>%
+  arrange(origin, time_hour) %>%
+  ungroup()
+ 
+nrow(grid)
+
+interp_one = function(t, p) {
+  ok = !is.na(p)
+  if (sum(ok) < 2) return(rep(NA_real_, length(p)))
+  approx(as.numeric(t)[ok], p[ok], xout = as.numeric(t), rule = 1)$y
+}
+
+impute_pressure = function(g) {
+  site_off = tapply(g$pressure, g$origin, mean, na.rm = TRUE) - mean(g$pressure, na.rm = TRUE)
+  g %>%
+    group_by(origin) %>%
+    mutate(p_int = interp_one(time_hour, pressure)) %>%
+    group_by(time_hour) %>%
+    mutate(p_other = mean(pressure, na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(p_other = ifelse(is.nan(p_other), NA_real_, p_other),
+           p_int   = ifelse(is.na(p_int), p_other + site_off[origin], p_int)) %>%
+    group_by(origin) %>%
+    tidyr::fill(p_int, .direction = "downup") %>%
+    ungroup() %>%
+    pull(p_int)
+}
+
+grid$p_D = impute_pressure(grid)
+sum(is.na(grid$p_D))    
+
+data_D = data_C %>%
+  select(-pressure) %>%
+  left_join(grid %>% select(origin, time_hour, pressure = p_D),
+            by = c("origin", "time_hour"))
+stopifnot(nrow(data_D) == nrow(data_C))
+
+after_end = is.na(data_D$pressure)
+sum(after_end)
+data_D$pressure[after_end] = data_C$pressure[after_end]
+
+c(缺失時段_D補值 = mean(grid$p_D[is.na(grid$pressure)]),
+  有觀測時段     = mean(grid$pressure, na.rm = TRUE),
+  B_C補上的值約  = median(analysis_data$pressure, na.rm = TRUE))
+
+
+set.seed(1)
+gap_runs = unlist(lapply(split(is.na(grid$pressure), grid$origin),
+                         function(z) { r = rle(z); r$lengths[r$values] }))
+obs_idx = which(!is.na(grid$pressure))
+
+mask = integer(0)
+for (s in sample(obs_idx, 900)) {
+  L    = gap_runs[sample.int(length(gap_runs), 1)]
+  cand = s:min(s + L - 1, nrow(grid))
+  cand = cand[grid$origin[cand] == grid$origin[s] & !is.na(grid$pressure[cand])]
+  mask = c(mask, cand)
+}
+mask  = unique(mask)
+truth = grid$pressure[mask]
+
+grid_m = grid
+grid_m$pressure[mask] = NA
+
+pred_B = rep(median(grid_m$pressure, na.rm = TRUE), length(mask))
+pred_C = ave(grid_m$pressure, grid_m$origin, month(grid_m$time_hour),
+             FUN = function(z) median(z, na.rm = TRUE))[mask]
+pred_D = impute_pressure(grid_m)[mask]
+
+rmse = function(p) sqrt(mean((p - truth)^2))
+mask_result = c(遮蔽筆數 = length(mask),
+                B_整體中位數   = rmse(pred_B),
+                C_機場月份中位數 = rmse(pred_C),
+                D_時間內插     = rmse(pred_D))
+round(mask_result, 2) 
+
+
+strategies = list(A = data_A, B = data_B, C = data_C, D = data_D)  
+missing_check = sapply(strategies, function(d) colSums(is.na(d[numeric_vars])))
+missing_check
+stopifnot(all(missing_check == 0))
+
+
+summary_strategy = function(d, label) {
+  data.frame(
+    策略 = label,
+    樣本數 = nrow(d),
+    抵達延誤平均 = round(mean(d$arr_delay), 2),
+    抵達延誤中位數 = round(median(d$arr_delay), 2),
+    抵達延誤IQR = round(IQR(d$arr_delay), 2),
+    氣壓平均 = round(mean(d$pressure), 2),
+    氣壓標準差 = round(sd(d$pressure), 2),
+    Pearson = round(cor(d$arr_delay, d$pressure), 4),
+    Spearman = round(cor(d$arr_delay, d$pressure, method = "spearman"), 4)
+  )
+}
+
+comparison_table =rbind(
+  summary_strategy(data_A, "A：完整案例"),
+  summary_strategy(data_B, "B：整體中位數補值"),
+  summary_strategy(data_C, "C：pressure 依機場×月份補值（對照）"),
+  summary_strategy(data_D, "D：pressure 時間內插（依機制）")      # 【新增】
+)
+comparison_table
+```
+
+```{r part5,echo=TRUE}
+numeric_vars=c("dep_delay", "arr_delay", "air_time", "distance",
+                  "temp", "dewp", "humid", "wind_speed",
+                  "precip", "visib", "pressure")
+
+pca_list =list(
+  A = prcomp(data_A[numeric_vars], center = TRUE, scale. = TRUE),
+  B = prcomp(data_B[numeric_vars], center = TRUE, scale. = TRUE),
+  C = prcomp(data_C[numeric_vars], center = TRUE, scale. = TRUE),
+  D=prcomp(data_D[numeric_vars],center = TRUE,scale. = TRUE)
+)
+k=5
+ref_name = "D"
+pca_ref  = pca_list[[ref_name]]
+data_ref = strategies[[ref_name]]
+
+
+round(sapply(data_ref[numeric_vars], sd), 2)    
+pca_raw = prcomp(data_ref[numeric_vars], center = TRUE, scale. = FALSE)
+round(100 * pca_raw$sdev[1]^2 / sum(pca_raw$sdev^2), 1)  
+
+ev   = pca_ref$sdev^2
+prop = ev / sum(ev)
+pca_table = data.frame(
+  主成分 = paste0("PC", seq_along(ev)),
+  特徵值 = round(ev, 3),
+  解釋百分比 = round(prop * 100, 2),
+  累積百分比 = round(cumsum(prop) * 100, 2)
+)
+pca_table
+
+k_kaiser = sum(ev > 1)                        
+k_80     = which(cumsum(prop) >= 0.80)[1]    
+c(Kaiser = k_kaiser, 累積80 = k_80)
+
+
+ev_all = sapply(pca_list, function(p) p$sdev^2)
+matplot(seq_len(nrow(ev_all)), ev_all, type = "b", pch = 19, lty = 1,
+        col = c("#eb6834", "#1baf7a", "#eda100", "#2a78d6"),
+        xlab = "Principal component", ylab = "Eigenvalue", main = "Scree plot (4 strategies)")
+abline(h = 1, lty = 2, col = "grey40")         # Kaiser 基準線
+legend("topright", legend = names(pca_list), col = c("#eb6834", "#1baf7a", "#eda100", "#2a78d6"),
+       pch = 19, lty = 1, bty = "n")
+
+
+var_tab = sapply(pca_list, function(p) round(100 * p$sdev[1:k]^2 / sum(p$sdev^2), 2))
+rownames(var_tab) = paste0("PC", 1:k)
+var_tab
+# ---------- 4. 穩定性:對齊方向後比較權重 ----------
+ref = pca_ref$rotation[, 1:k]
+align = function(r) {
+  s = sign(colSums(r * ref)); s[s == 0] = 1
+  sweep(r, 2, s, "*")
+}
+rot = lapply(pca_list, function(p) align(p$rotation[, 1:k]))
+
+others = setdiff(names(pca_list), ref_name)
+stability = data.frame(
+  主成分 = paste0("PC", 1:k),
+  sapply(others, function(s) round(abs(colSums(pca_list[[s]]$rotation[, 1:k] * ref)), 3)),
+  check.names = FALSE
+)
+names(stability)[-1] = paste0(others, "對", ref_name)
+stability
+
+
+cross = lapply(others, function(s) round(abs(t(pca_list[[s]]$rotation[, 1:k]) %*% ref), 2))
+names(cross) = others
+cross
+
+pc12 = cbind(sapply(rot, function(r) r[, 1]), sapply(rot, function(r) r[, 2]))
+colnames(pc12) = paste0(rep(c("PC1_", "PC2_"), each = length(rot)), names(rot))
+round(pc12, 3)
+
+round(pca_ref$rotation[, 1:k], 3)                            
+
+load_ref = pca_ref$rotation[, 1:k] %*% diag(pca_ref$sdev[1:k])
+colnames(load_ref) = paste0("PC", 1:k)
+round(load_ref, 3)
+```
+
