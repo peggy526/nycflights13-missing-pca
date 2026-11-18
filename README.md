@@ -3,7 +3,7 @@
 **作者**：林沛萱　**日期**：2026 年 11 月
 
 ## 互動成果
-- 互動探索頁（Q1–Q7 問題導覽、hover、篩選、切分、框選）：https://peggy526.github.io/-/
+- 互動探索頁（Q1–Q7 問題導覽、hover、篩選、切分、框選）：https://peggy526.github.io/nycflights13-missing-pca/
 
 ## 主要發現
 - 延誤缺失是結構性缺失（航班取消或轉降）；氣壓缺失跟著當下天氣，較可能是 MAR。
