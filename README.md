@@ -4,7 +4,6 @@
 
 ## 互動成果
 - 互動探索頁（Q1–Q7 問題導覽、hover、篩選、切分、框選）：https://peggy526.github.io/-/
-- R 互動 notebook：https://peggy526.github.io/nycflights13-missing-pca/pca_explore.html
 
 ## 主要發現
 - 延誤缺失是結構性缺失（航班取消或轉降）；氣壓缺失跟著當下天氣，較可能是 MAR。
@@ -19,7 +18,7 @@
 | [appendix_ai_baseline.pdf](appendix_ai_baseline.pdf) | AI 基準 EDA 報表 |
 | [interactive_screenshots.pdf](interactive_screenshots.pdf) | 互動探索截圖與發現 |
 | `main_analysis.Rmd` / `.html` | 資料合併、缺失診斷、四種策略、PCA |
-| `pca_explore.Rmd` / `.html` | R 互動探索 |
+| `pca_explore.Rmd` | R 互動探索（knit 後可得互動 notebook） |
 | `dashboard_source/` | 互動探索頁的產生程式（Python，資料處理與 PCA 設定同 R 主程式） |
 
 ## 如何重現
